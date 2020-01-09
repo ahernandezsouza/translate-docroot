@@ -1,0 +1,137 @@
+<?php
+require 'vendor/autoload.php';
+
+use Aws\Translate\TranslateClient;
+use Aws\Exception\AwsException;
+use Aws\Translate\Exception\TranslateException;
+
+
+/**
+ * Implements hook_field_widget_form_alter().
+ */
+function aws_translate_widget_simple_field_widget_form_alter(&$element, &$form_state, $context) {
+
+    drupal_add_css('[id*="replace_textfield_"] [id*="-weight-"] {display: none;}', array('type' => 'inline'));
+    if ($context['field']['type'] == 'text_long' && $context['field']['translatable'] == 1) {
+
+        $delta = $context['delta'];
+        $name = $element['#field_name'];
+        $title = $element['#title'];
+
+        $element += array(
+            '#prefix' => '<div id="replace_textfield_' . $name . '_' . $delta . '_div">',
+            '#suffix' => '</div>',
+        );
+
+        $element['button'] = array(
+            '#type' => 'button',
+            '#name' => 'button_' . $name . '_' . $delta,
+            '#value' => t('Translate '. $title),
+            '#ajax' => array(
+                'callback' => 'ajax_translate_callback',
+                'wrapper' => 'replace_textfield_' . $name . '_' . $delta.'_div',
+                'method' => 'replace',
+                'effect' => 'fade',
+            ),
+            '#weight' => 1,
+            '#prefix' => '<br>',
+        );
+    }
+}
+
+function ajax_translate_callback($form, $form_state) {
+
+    $translation = '';
+
+    $triggering_element =$form_state['triggering_element']['#parents'];
+
+    $field = $triggering_element[0];
+
+    $language = $triggering_element[1];
+
+    $delta = $triggering_element[2];
+
+    $element_root = $form[$field][$language][$delta];
+
+    $language_tr = substr($element_root['#language'],0,2);
+
+    $sourcetext = $element_root['value']['#value'];
+
+
+    if(array_key_exists('format',$form_state['values'][$field][$language][$delta])){
+
+        $format = $form_state['values'][$field][$language][$delta]['format'];
+
+        if($format != "plain_text"){
+            $sourcetext = check_markup($sourcetext, $format);
+        }
+    }
+    //drupal_add_css(drupal_get_path('module', 'aws_translate_widget_simple') . '/css/aws_translate_widget_simple.css', array('group' => CSS_DEFAULT, 'every_page' => TRUE));
+
+    if (!empty($sourcetext)){
+
+        $translation = translate_aws($sourcetext, $language_tr);
+
+    }
+
+    if (!empty($translation)) {
+        $element_root['value']['#value'] = $translation;
+    }
+
+    return $element_root;
+}
+
+
+/**
+ * Call to AWS via AWS\Translate\TranslateClient
+ */
+function translate_aws($sourcetext, $language){
+    try{
+        $client = new TranslateClient([
+            'region'      => 'us-east-1',
+            'credentials' => [
+                'key'    => 'AKIA5HG2UENSJK6GTDH3',
+                'secret' => '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',
+            ],
+            'version'    => 'latest',
+            ]);
+        $result = $client->translateText([
+            'SourceLanguageCode' => 'en', // REQUIRED
+            'TargetLanguageCode' => $language, // REQUIRED
+            'Text' => $sourcetext, // REQUIRED
+        ]);
+        drupal_set_message(t('Translation Succesful.'), 'status');
+        return $result['TranslatedText'];
+    } catch (Aws\Translate\Exception\TranslateException $e) {
+        $aws_error_message = $e->getMessage();
+        form_set_error('form', 'Translation unsuccessful, text unchanged. Please review Error Log for additional detail');
+        watchdog(
+            'AWS Translate Widget',
+            'Translation Failed: %awsmessage',
+            array('%awsmessage' => $aws_error_message),
+            WATCHDOG_ERROR
+        );
+        return FALSE;
+    } catch (Aws\Exception\AwsException $e) {
+        // This catches the more generic AwsException. You can grab information
+        // from the exception using methods of the exception object.
+        $aws_request_id = $e->getAwsRequestId();
+        $aws_error_type = $e->getAwsErrorType();
+        $aws_error_code = $e->getAwsErrorCode();
+
+        // This dumps any modeled response data, if supported by the service
+        // Specific members can be accessed directly (e.g. $e['MemberName'])
+        watchdog(
+            'AWS Translate Widget',
+            'AWS Error: Request ID = %awsrequestid Error Type = %awserrortype Error Code = %awserrorcode',
+            array('%awsrequestid' => $aws_request_id, '%awserrortype' => $aws_error_type, '%awserrorcode' => $aws_error_code),
+            WATCHDOG_ERROR
+        );
+        return FALSE;
+    }
+
+
+
+}
+
+
